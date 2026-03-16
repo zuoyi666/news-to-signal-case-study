@@ -9,7 +9,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, ttest_1samp, skew, kurtosis
 
 from config import MIN_SAMPLE_DROP, MIN_SAMPLE_TERCILE, SIGNAL_COLS
 
@@ -248,9 +248,164 @@ def compute_monthly_stability(spread_series: pd.Series) -> pd.Series:
     return monthly
 
 
+def compute_ic_statistics(ic_series: pd.Series) -> dict:
+    """
+    Compute statistical significance tests for IC series.
+
+    Tests the null hypothesis that the true mean IC is zero.
+
+    Args:
+        ic_series: Series of daily Information Coefficients.
+
+    Returns:
+        Dictionary with statistical metrics:
+            - mean_ic: Mean of daily ICs
+            - ic_std: Standard deviation of daily ICs
+            - t_statistic: t-statistic for mean IC test
+            - p_value: Two-tailed p-value
+            - annualized_ir: Information Ratio annualized (IC_mean / IC_std * sqrt(252))
+            - significant_5pct: Boolean, True if p < 0.05
+            - skewness: Skewness of IC distribution
+            - kurtosis: Excess kurtosis of IC distribution
+            - n_observations: Number of valid IC observations
+    """
+    if len(ic_series) < 2:
+        return {
+            "mean_ic": np.nan,
+            "ic_std": np.nan,
+            "t_statistic": np.nan,
+            "p_value": np.nan,
+            "annualized_ir": np.nan,
+            "significant_5pct": False,
+            "skewness": np.nan,
+            "kurtosis": np.nan,
+            "n_observations": 0,
+        }
+
+    # Remove NaN values
+    clean_ic = ic_series.dropna()
+    n = len(clean_ic)
+
+    if n < 2:
+        return {
+            "mean_ic": np.nan,
+            "ic_std": np.nan,
+            "t_statistic": np.nan,
+            "p_value": np.nan,
+            "annualized_ir": np.nan,
+            "significant_5pct": False,
+            "skewness": np.nan,
+            "kurtosis": np.nan,
+            "n_observations": n,
+        }
+
+    mean_ic = clean_ic.mean()
+    ic_std = clean_ic.std(ddof=1)  # Sample standard deviation
+
+    # t-test for mean different from zero
+    t_stat, p_val = ttest_1samp(clean_ic, 0)
+
+    # Annualized Information Ratio (assuming 252 trading days)
+    annualized_ir = mean_ic / ic_std * np.sqrt(252) if ic_std > 0 else np.nan
+
+    return {
+        "mean_ic": mean_ic,
+        "ic_std": ic_std,
+        "t_statistic": t_stat,
+        "p_value": p_val,
+        "annualized_ir": annualized_ir,
+        "significant_5pct": p_val < 0.05,
+        "skewness": skew(clean_ic),
+        "kurtosis": kurtosis(clean_ic),
+        "n_observations": n,
+    }
+
+
+def compute_risk_adjusted_metrics(returns: pd.Series, freq: int = 252) -> dict:
+    """
+    Compute risk-adjusted performance metrics.
+
+    Args:
+        returns: Series of returns (daily frequency assumed).
+        freq: Annualization factor (252 for trading days).
+
+    Returns:
+        Dictionary with risk metrics:
+            - sharpe_ratio: Return/risk ratio (annualized)
+            - sortino_ratio: Return/downside deviation (annualized)
+            - max_drawdown: Maximum peak-to-trough decline
+            - calmar_ratio: Annualized return / abs(max_drawdown)
+            - volatility: Annualized standard deviation
+            - downside_deviation: Annualized downside deviation
+            - win_rate: Fraction of positive returns
+    """
+    if len(returns) < 2:
+        return {
+            "sharpe_ratio": np.nan,
+            "sortino_ratio": np.nan,
+            "max_drawdown": np.nan,
+            "calmar_ratio": np.nan,
+            "volatility": np.nan,
+            "downside_deviation": np.nan,
+            "win_rate": np.nan,
+        }
+
+    clean_returns = returns.dropna()
+
+    if len(clean_returns) < 2:
+        return {
+            "sharpe_ratio": np.nan,
+            "sortino_ratio": np.nan,
+            "max_drawdown": np.nan,
+            "calmar_ratio": np.nan,
+            "volatility": np.nan,
+            "downside_deviation": np.nan,
+            "win_rate": np.nan,
+        }
+
+    # Basic metrics
+    mean_ret = clean_returns.mean()
+    std_ret = clean_returns.std()
+    volatility = std_ret * np.sqrt(freq)
+
+    # Sharpe ratio (assuming zero risk-free rate)
+    sharpe = mean_ret / std_ret * np.sqrt(freq) if std_ret > 0 else np.nan
+
+    # Sortino ratio (downside deviation)
+    downside_returns = clean_returns[clean_returns < 0]
+    downside_dev = downside_returns.std() * np.sqrt(freq) if len(downside_returns) > 0 else np.nan
+    sortino = mean_ret * freq / downside_dev if downside_dev and downside_dev > 0 else np.nan
+
+    # Maximum drawdown
+    cum_returns = (1 + clean_returns).cumprod()
+    rolling_max = cum_returns.expanding().max()
+    drawdown = (cum_returns - rolling_max) / rolling_max
+    max_dd = drawdown.min()
+
+    # Calmar ratio
+    calmar = mean_ret * freq / abs(max_dd) if max_dd != 0 else np.nan
+
+    # Win rate
+    win_rate = (clean_returns > 0).mean()
+
+    return {
+        "sharpe_ratio": sharpe,
+        "sortino_ratio": sortino,
+        "max_drawdown": max_dd,
+        "calmar_ratio": calmar,
+        "volatility": volatility,
+        "downside_deviation": downside_dev,
+        "win_rate": win_rate,
+        "mean_daily_return": mean_ret,
+        "annualized_return": mean_ret * freq,
+    }
+
+
 def run_baseline_comparison(df: pd.DataFrame) -> pd.DataFrame:
     """
     Run evaluation for all three signals and return summary comparison.
+
+    Includes statistical significance tests and risk-adjusted metrics.
 
     Args:
         df: DataFrame with all signal columns and future_return_5d.
@@ -269,14 +424,35 @@ def run_baseline_comparison(df: pd.DataFrame) -> pd.DataFrame:
         ic_series = compute_daily_ic(df, signal_col)
         metrics = summarize_metrics(spread_series, ic_series)
 
-        results.append({
+        # Statistical significance for IC
+        ic_stats = compute_ic_statistics(ic_series)
+
+        # Risk-adjusted metrics for spread (treat as strategy returns)
+        risk_metrics = compute_risk_adjusted_metrics(spread_series)
+
+        row = {
             "signal": signal_col,
+            "n_days": len(spread_series),
             "mean_spread": metrics["mean_spread"],
             "spread_hit_rate": metrics["spread_hit_rate"],
             "mean_ic": metrics["mean_ic"],
             "ic_hit_rate": metrics["ic_hit_rate"],
-            "n_days": len(spread_series),
-        })
+            # Statistical significance
+            "ic_t_statistic": ic_stats["t_statistic"],
+            "ic_p_value": ic_stats["p_value"],
+            "annualized_ir": ic_stats["annualized_ir"],
+            "significant_5pct": ic_stats["significant_5pct"],
+            "ic_skewness": ic_stats["skewness"],
+            "ic_kurtosis": ic_stats["kurtosis"],
+            # Risk metrics
+            "sharpe_ratio": risk_metrics["sharpe_ratio"],
+            "sortino_ratio": risk_metrics["sortino_ratio"],
+            "max_drawdown": risk_metrics["max_drawdown"],
+            "calmar_ratio": risk_metrics["calmar_ratio"],
+            "volatility": risk_metrics["volatility"],
+        }
+
+        results.append(row)
 
     return pd.DataFrame(results)
 
