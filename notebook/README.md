@@ -1,34 +1,13 @@
-# Legacy notebook folder
+# Legacy Notebook Path
 
-`notebook/` is kept for backward compatibility with the original Claude Code project layout.
+`notebook/` is retained only as a compatibility marker for the original project layout.
 
-For the standardized workflow, use:
+Canonical notebook location:
 
-- `notebooks/` for analysis notebooks
-- `artifacts/runs/exp_YYYYMMDD_name/` for all persisted outputs
+- `notebooks/case_study.ipynb`
 
-When saving outputs from notebooks, use the helper convention:
+Canonical persisted output location:
 
-```python
-import os
-from pathlib import Path
+- `artifacts/runs/exp_YYYYMMDD_name/`
 
-artifact_root = Path(
-    os.getenv("NEWS_TO_SIGNAL_ARTIFACT_RUN_DIR", "artifacts/runs")
-)
-run_dirs = sorted(artifact_root.glob("exp_*"))
-run_dir = run_dirs[-1] if run_dirs else artifact_root
-
-fig_dir = run_dir / "figures"
-table_dir = run_dir / "tables"
-report_dir = run_dir / "reports"
-fig_dir.mkdir(parents=True, exist_ok=True)
-table_dir.mkdir(parents=True, exist_ok=True)
-report_dir.mkdir(parents=True, exist_ok=True)
-```
-
-Then save files under `run_dir` instead of `results/`:
-
-- `.../figures`
-- `.../tables`
-- `.../reports`
+Do not add new notebooks under `notebook/`. Use `notebooks/` for all GitHub-facing research narratives going forward.

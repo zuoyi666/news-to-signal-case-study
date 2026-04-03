@@ -2,11 +2,7 @@
 
 Canonical notebooks directory for research writeups and exploratory analysis.
 
-Current project keeps historical notebook at:
-
-- `notebook/case_study.ipynb`
-
-When migrating, copy/convert the notebook into:
+Canonical notebook:
 
 - `notebooks/case_study.ipynb`
 
